@@ -98,7 +98,7 @@ class BitTorrent
         static inline string ACK = "ACK";
         static inline string COMPLETED = "COMPLETED";
 
-        static inline string READY_FOR_DOWNLOAD = "READY FOR DOWNLOAD";
+        static inline string CLIENT_IS_DONE = "CLIENT IS DONE";
         static inline string REQUEST_FILE_OWNERS = "REQUEST FILE OWNERS";
         static inline string REQUEST_FILE_SEGMENT = "REQUEST FILE SEGMENT";
     };
@@ -155,13 +155,13 @@ void requestFileSegmentsFromTracker(vector<FileSegment> &fileSegments)
         fileSegments[i].owners.resize(numOwners);
         
         MPI_Recv(
-            &fileSegments[i].index, 1, MPI_INT, TRACKER_RANK,
+            fileSegments[i].owners.data(), numOwners, MPI_INT, TRACKER_RANK,
             BitTorrent::MPI_TAGS::RESPONSE_FROM_TRACKER,
             MPI_COMM_WORLD, MPI_STATUS_IGNORE
         );
-        
+
         MPI_Recv(
-            fileSegments[i].owners.data(), numOwners, MPI_INT, TRACKER_RANK,
+            &fileSegments[i].index, 1, MPI_INT, TRACKER_RANK,
             BitTorrent::MPI_TAGS::RESPONSE_FROM_TRACKER,
             MPI_COMM_WORLD, MPI_STATUS_IGNORE
         );
@@ -306,7 +306,7 @@ void *download_thread_func(void *arg)
 
     // Dau semnal tracker-ului ca finalizat
     // "READY FOR DOWNLOAD"
-    string message(BitTorrent::MPI_MESSAGES::READY_FOR_DOWNLOAD);
+    string message(BitTorrent::MPI_MESSAGES::CLIENT_IS_DONE);
     MPI_Send(
         message.data(), message.size(), MPI_CHAR, TRACKER_RANK,
         BitTorrent::MPI_TAGS::REQUEST_TO_TRACKER, MPI_COMM_WORLD
@@ -464,7 +464,7 @@ void insertInFilesDataBase(int numTasks, int rank)
     }
 }
 
-void sendCompleteMessageToAllPeers(int numTasks)
+void sendCompletedMessageToAllPeers(int numTasks)
 {
     // "COMPLETED"
     string message(BitTorrent::MPI_MESSAGES::COMPLETED);
@@ -485,16 +485,15 @@ void sendAllFileSegmentsInfo(File &file, int sourceRank)
             &numOwners, 1, MPI_INT, sourceRank,
             BitTorrent::MPI_TAGS::RESPONSE_FROM_TRACKER, MPI_COMM_WORLD
         );
-        file.fileSegments[i].owners.resize(numOwners);
-        
-        MPI_Send(
-            &file.fileSegments[i].index, 1, MPI_INT, sourceRank,
-            BitTorrent::MPI_TAGS::RESPONSE_FROM_TRACKER, MPI_COMM_WORLD
-        );
-        
+
         MPI_Send(
             file.fileSegments[i].owners.data(), file.fileSegments[i].owners.size(),
             MPI_INT, sourceRank,
+            BitTorrent::MPI_TAGS::RESPONSE_FROM_TRACKER, MPI_COMM_WORLD
+        );
+
+        MPI_Send(
+            &file.fileSegments[i].index, 1, MPI_INT, sourceRank,
             BitTorrent::MPI_TAGS::RESPONSE_FROM_TRACKER, MPI_COMM_WORLD
         );
     }
@@ -540,28 +539,28 @@ void requestFileOwners(const MPI_Status &status)
 /*
  * Functie 'helper' pentru a trata semnalul "READY FOR DOWNLOAD" primit de Tracker
 */
-bool isReadyForDownload(int numTasks, int rank, vector<bool> &readyClients, const MPI_Status& status)
+bool existsClientToDownload(int numTasks, int rank, vector<bool> &completedClients, const MPI_Status& status)
 {
-    readyClients[status.MPI_SOURCE] = true;
+    completedClients[status.MPI_SOURCE] = true;
 
     // Verific daca toate peer-urile (clienti) sunt pregatiti pentru descarcare
-    for (int i = 1; i < (int) readyClients.size(); i++) {
-        if (!readyClients[i]) {
+    for (int i = 1; i < (int) completedClients.size(); i++) {
+        if (!completedClients[i]) {
             return false;
         }
     }
 
-    sendCompleteMessageToAllPeers(numTasks);
+    sendCompletedMessageToAllPeers(numTasks);
     return true;
 }
 
 void tracker(int numTasks, int rank)
 {
     // Primeste metadatele fisierelor de la toti peer-urile (clientii), si ii adauga in baza de date
+    // Asteapta ca toate peer-urile (clienti) sa fie pregatiti pentru descarcare
     insertInFilesDataBase(numTasks, rank);
 
-    // Asteapta ca toate peer-urile (clienti) sa fie pregatiti pentru descarcare
-    vector<bool> readyClients(numTasks, false);
+    vector<bool> completedClients(numTasks, false);
 
     while (true) {
         string request;
@@ -576,9 +575,9 @@ void tracker(int numTasks, int rank)
         request.resize(strlen(request.c_str()));
 
 
-        if (request == BitTorrent::MPI_MESSAGES::READY_FOR_DOWNLOAD) {
-            // "READY FOR DOWNLOAD"
-            bool code = isReadyForDownload(numTasks, rank, readyClients, status);
+        if (request == BitTorrent::MPI_MESSAGES::CLIENT_IS_DONE) {
+            // "CLIENT IS DONE"
+            bool code = existsClientToDownload(numTasks, rank, completedClients, status);
 
             if (code) {
                 return;
