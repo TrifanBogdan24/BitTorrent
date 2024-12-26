@@ -24,16 +24,17 @@ using namespace std;
 class FileSegment
 {
  public:
-    string hash;
-    vector<int> owners;
     int index;
+    string hash;
+    vector<int> clients;
+
 
  public:
     FileSegment() {}
-    FileSegment(string hashValue, vector<int> ownersValue, int indexValue)
+    FileSegment(string hashValue, vector<int> clientsValue, int indexValue)
     {
         this->hash = hashValue;
-        this->owners = ownersValue;
+        this->clients = clientsValue;
         this->index = indexValue;
     }
 };
@@ -130,21 +131,11 @@ class BitTorrent
 BitTorrent* BitTorrent::instance = nullptr;
 
 
-void createClientFile(int clientIndex, string filename,
-    string hash, int fileSegmentIndex)
+
+void requestFileSegmentsMetadataFromTracker(vector<FileSegment> &fileSegments)
 {
-    string clientFileName("client" + to_string(clientIndex) + "_" + filename);
-    ofstream fout(clientFileName, ios::app);
-    fout << hash << "\n";
-    fout.close();
-}
-
-
-
-void requestFileSegmentsFromTracker(vector<FileSegment> &fileSegments)
-{
-    for (int i = 0; i < (int) fileSegments.size(); i++) {
-        int numOwners = fileSegments[i].owners.size();
+    for (size_t i = 0; i < fileSegments.size(); i++) {
+        int numOwners = fileSegments[i].clients.size();
         
         MPI_Recv(
             &numOwners, 1, MPI_INT, TRACKER_RANK,
@@ -152,42 +143,38 @@ void requestFileSegmentsFromTracker(vector<FileSegment> &fileSegments)
             MPI_COMM_WORLD, MPI_STATUS_IGNORE
         );
         
-        fileSegments[i].owners.resize(numOwners);
+        fileSegments[i].clients.resize(numOwners);
         
         MPI_Recv(
-            fileSegments[i].owners.data(), numOwners, MPI_INT, TRACKER_RANK,
+            &fileSegments[i].index, 1, MPI_INT, TRACKER_RANK,
             BitTorrent::MPI_TAGS::RESPONSE_FROM_TRACKER,
             MPI_COMM_WORLD, MPI_STATUS_IGNORE
         );
 
         MPI_Recv(
-            &fileSegments[i].index, 1, MPI_INT, TRACKER_RANK,
+            fileSegments[i].clients.data(), numOwners, MPI_INT, TRACKER_RANK,
             BitTorrent::MPI_TAGS::RESPONSE_FROM_TRACKER,
             MPI_COMM_WORLD, MPI_STATUS_IGNORE
         );
     }
 }
 
-void requestFileFromTracker(int rank, string filename,
+void requestFileMetadataFromTracker(int rank, string filename,
     vector<FileSegment> &fileSegments)
 {
     // "REQUEST FILE OWNERS"
-    string requestFileOwners(BitTorrent::MPI_MESSAGES::REQUEST_FILE_OWNERS);
+    string message(BitTorrent::MPI_MESSAGES::REQUEST_FILE_OWNERS);
 
     MPI_Send(
-        requestFileOwners.data(), requestFileOwners.size(),
+        message.data(), message.size(),
         MPI_CHAR, TRACKER_RANK,
         BitTorrent::MPI_TAGS::REQUEST_TO_TRACKER, MPI_COMM_WORLD
     );
-    
-    requestFileOwners.resize(strlen(requestFileOwners.c_str()));
     
     MPI_Send(
         filename.data(), filename.size(), MPI_CHAR, TRACKER_RANK,
         BitTorrent::MPI_TAGS::REQUEST_TO_TRACKER, MPI_COMM_WORLD
     );
-    
-    filename.resize(strlen(filename.c_str()));
     
     int numFileSegments = fileSegments.size();
     MPI_Recv(
@@ -197,7 +184,7 @@ void requestFileFromTracker(int rank, string filename,
     );
     fileSegments.resize(numFileSegments);    
     
-    requestFileSegmentsFromTracker(fileSegments);
+    requestFileSegmentsMetadataFromTracker(fileSegments);
 }
 
 void addFileSegmentInRequestedFile(
@@ -210,21 +197,24 @@ void addFileSegmentInRequestedFile(
     requestedFileSegment.index = fileSegmentIndex;
 }
 
+/*
+ * descarcarea efectiva a segmentului de fisier
+*/
 void requestFileSegmentFromPeer(int rank, string hash, int fileIndex,
     vector<FileSegment> &fileSegments, int fileSegmentIndex)
 {
     BitTorrent *bitTorrent = BitTorrent::getInstance();
 
     // Aleg primul owner al fisierului
-    int selectedOwner = fileSegments[fileSegmentIndex].owners[0];
+    int selectedOwner = fileSegments[fileSegmentIndex].clients[0];
 
 
     // Trimite request la owner-ul selectat (la un peer, adica la un client),
     // pentru a obtine un segment de fisier
     // "REQUEST FILE SEGMENT"
-    string fileSegmentRequest(BitTorrent::MPI_MESSAGES::REQUEST_FILE_SEGMENT);
+    string message(BitTorrent::MPI_MESSAGES::REQUEST_FILE_SEGMENT);
     MPI_Send(
-        fileSegmentRequest.data(), fileSegmentRequest.size(),
+        message.data(), message.size(),
         MPI_CHAR, selectedOwner,
         BitTorrent::MPI_TAGS::FILE_UPLOAD, MPI_COMM_WORLD
     );
@@ -260,15 +250,26 @@ void requestFileSegmentFromPeer(int rank, string hash, int fileIndex,
     );
 }
 
+
+void writeHashInClientOutputFile(int clientIndex, string filename,
+    string hash, int fileSegmentIndex)
+{
+    string clientFileName("client" + to_string(clientIndex) + "_" + filename);
+    ofstream fout(clientFileName, ios::app);
+    fout << hash << "\n";
+    fout.close();
+}
+
+
 void manageRequestedFile(int rank, string filename, int fileIndex)
 {
     BitTorrent *bitTorrent = BitTorrent::getInstance();
 
     vector<FileSegment> fileSegments;
 
-    requestFileFromTracker(rank, filename, fileSegments);
+    requestFileMetadataFromTracker(rank, filename, fileSegments);
     
-    for (int i = 0; i < (int) fileSegments.size(); i++) {
+    for (size_t i = 0; i < fileSegments.size(); i++) {
         string hash;
         hash.resize(HASH_SIZE);
         requestFileSegmentFromPeer(rank, hash, fileIndex, fileSegments, i);
@@ -281,7 +282,7 @@ void manageRequestedFile(int rank, string filename, int fileIndex)
     if (requestedFile.numReceivedFileSegments == (int) fileSegments.size()) {
         for (int i = 0; i < requestedFile.numReceivedFileSegments; i++) {
             string hash = requestedFile.requestedFileSegments[i].hash;
-            createClientFile(rank, filename, hash, i);
+            writeHashInClientOutputFile(rank, filename, hash, i);
         }
         
         bitTorrent->numCompletedFiles++;
@@ -305,7 +306,7 @@ void *download_thread_func(void *arg)
     }
 
     // Dau semnal tracker-ului ca finalizat
-    // "READY FOR DOWNLOAD"
+    // "CLIENT IS DONE"
     string message(BitTorrent::MPI_MESSAGES::CLIENT_IS_DONE);
     MPI_Send(
         message.data(), message.size(), MPI_CHAR, TRACKER_RANK,
@@ -337,7 +338,7 @@ void requestFileSegment(MPI_Status status)
 
     // Cauta prin fisierele peer-ului (clientului)
     // si trimite hash-ul FILE_SEGMENT-ului de care e nevoie
-    for (int i = 0; i < (int) bitTorrent->peerOwnedFiles.size(); i++) {
+    for (size_t i = 0; i < bitTorrent->peerOwnedFiles.size(); i++) {
         File &peerFile = bitTorrent->peerOwnedFiles[i];
         if (peerFile.filename == filename) {
             MPI_Send(
@@ -384,7 +385,7 @@ void processFileSegments(File &peerFile, int peerIndex)
     string hash;
     hash.resize(HASH_SIZE);
 
-    for (int i = 0; i < (int) peerFile.fileSegments.size(); i++) {
+    for (size_t i = 0; i < peerFile.fileSegments.size(); i++) {
         MPI_Recv(
             hash.data(), hash.size(), MPI_CHAR, peerIndex,
             BitTorrent::MPI_TAGS::FILE_METADATA,
@@ -393,7 +394,6 @@ void processFileSegments(File &peerFile, int peerIndex)
         hash.resize(strlen(hash.c_str()));
 
         // Adaug segmentul curent de fisier in structura de metadate
-        // (a ultimului) fisier din baza de date
         peerFile.fileSegments[i]
             = FileSegment(hash, vector<int> {peerIndex}, i);
     }
@@ -456,9 +456,9 @@ void insertInFilesDataBase(int numTasks, int rank)
     // Trimit un mesaj de confirmare fiecarui peer (client)
     for (int i = 1; i < numTasks; i++) {
         // "ACK"
-        string response(BitTorrent::MPI_MESSAGES::ACK);
+        string message(BitTorrent::MPI_MESSAGES::ACK);
         MPI_Send(
-            response.data(), response.size(), MPI_CHAR, i,
+            message.data(), message.size(), MPI_CHAR, i,
             BitTorrent::MPI_TAGS::FILE_METADATA, MPI_COMM_WORLD
         );
     }
@@ -479,21 +479,22 @@ void sendCompletedMessageToAllPeers(int numTasks)
 
 void sendAllFileSegmentsInfo(File &file, int sourceRank)
 {
-    for (int i = 0; i < (int) file.fileSegments.size(); i++) {
-        int numOwners = file.fileSegments[i].owners.size();
+    for (size_t i = 0; i < file.fileSegments.size(); i++) {
+        int numOwners = file.fileSegments[i].clients.size();
         MPI_Send(
             &numOwners, 1, MPI_INT, sourceRank,
             BitTorrent::MPI_TAGS::RESPONSE_FROM_TRACKER, MPI_COMM_WORLD
         );
 
         MPI_Send(
-            file.fileSegments[i].owners.data(), file.fileSegments[i].owners.size(),
-            MPI_INT, sourceRank,
+            &file.fileSegments[i].index, 1, MPI_INT, sourceRank,
             BitTorrent::MPI_TAGS::RESPONSE_FROM_TRACKER, MPI_COMM_WORLD
         );
 
+
         MPI_Send(
-            &file.fileSegments[i].index, 1, MPI_INT, sourceRank,
+            file.fileSegments[i].clients.data(), file.fileSegments[i].clients.size(),
+            MPI_INT, sourceRank,
             BitTorrent::MPI_TAGS::RESPONSE_FROM_TRACKER, MPI_COMM_WORLD
         );
     }
@@ -516,7 +517,7 @@ void requestFileOwners(const MPI_Status &status)
     );
     requestedFileName.resize(strlen(requestedFileName.c_str()));
 
-    for (int i = 0; i < (int) bitTorrent->filesDataBase.size(); i++) {
+    for (size_t i = 0; i < bitTorrent->filesDataBase.size(); i++) {
         if (bitTorrent->filesDataBase[i].filename != requestedFileName.c_str()) {
             continue;
         }
@@ -537,14 +538,14 @@ void requestFileOwners(const MPI_Status &status)
 
 
 /*
- * Functie 'helper' pentru a trata semnalul "READY FOR DOWNLOAD" primit de Tracker
+ * Functie 'helper' pentru a trata semnalul "CLIENT IS DONE" primit de Tracker
 */
 bool existsClientToDownload(int numTasks, int rank, vector<bool> &completedClients, const MPI_Status& status)
 {
     completedClients[status.MPI_SOURCE] = true;
 
     // Verific daca toate peer-urile (clienti) sunt pregatiti pentru descarcare
-    for (int i = 1; i < (int) completedClients.size(); i++) {
+    for (size_t i = 1; i < completedClients.size(); i++) {
         if (!completedClients[i]) {
             return false;
         }
@@ -728,7 +729,7 @@ void peer(int numTasks, int rank)
 
     r = pthread_create(&upload_thread, NULL, upload_thread_func, (void *) &rank);
     if (r) {
-        printf("Eroare la crearea thread-ului de FILE_UPLOAD\n");
+        printf("Eroare la crearea thread-ului de upload\n");
         exit(-1);
     }
 
@@ -740,7 +741,7 @@ void peer(int numTasks, int rank)
 
     r = pthread_join(upload_thread, &status);
     if (r) {
-        printf("Eroare la asteptarea thread-ului de FILE_UPLOAD\n");
+        printf("Eroare la asteptarea thread-ului de upload\n");
         exit(-1);
     }
 }
