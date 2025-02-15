@@ -1,10 +1,9 @@
-# Trifan Bogdan Cristian - 331 CD
+# Tema 2 APD | BitTorrent
 
-> Am obtinut punctajul de 40pct, ruland in **Docker**.
+> Am testat codul sursa folosind **Docker**.
 
-## Tema 2 APD | BitTorrent
 
-### Server descentralizat
+## Server descentralizat
 
 Tema consta in implementarea unui server descentralizat,
 care are la baza un tracker, in jurul caruia avem niste clienti.
@@ -40,7 +39,7 @@ care stie cine ce fisiere are, fara ca el sa aibe vreun fisier,
 el redirectioneaza traficul de la un client la altul.
 
 
-### Tracker
+## Tracker
 
 Tracker-ul nu are niciun fisier fizic,
 dar el stie informatiile referitoare la aceste fisiere.
@@ -57,7 +56,7 @@ practic date despre date (date despre fisiere), printre care:
 > dar stie hash-urile lor.
 
 
-#### Initializare Tracker
+### Initializare Tracker
 
 La inceputul conexiunii (formarii topologiei),
 tracker-ul trebuie sa stie pentru fiecare client toate aceste metadate,
@@ -70,7 +69,7 @@ La nivel de cod, acest flux de executie este reprezentat de
 functia `insertInFilesDataBase()`, apelata fix la inceputul functiei `tracker()`.
 Functia este responsabila si de trimiterea **"ACK"**-urilor.
 
-#### Interactiunea cu Tracker-ul
+### Interactiunea cu Tracker-ul
 
 Tracker-ul ruleaza intr-o bucla,
 oprita la primirea mesajului **"CLIENT IS DONE"**
@@ -99,7 +98,7 @@ si returneaza clientului care a facut request-ul urmatoarele informatii:
   - Indexul segmentului in fisier
 
 
-#### String-uri in MPI pentru Tracker
+### String-uri in MPI pentru Tracker
 
 - Trimise de tracker (fiecarui peer/client)
   - **ACK**: se trimite la initierea topologiei,
@@ -121,7 +120,7 @@ si returneaza clientului care a facut request-ul urmatoarele informatii:
 
 
 
-### Client (peer)
+## Client (peer)
 
 Asa cum am discutat mai devreme,
 client-ul atat detine fisiere, cat si doreste sa descare,
@@ -153,7 +152,7 @@ Dupa primirea **"ACK"**-ului din partea tracker-ului
 client-ul porneste cate un thread pentru download si updload.
 
 
-#### Thread-ul de download
+### Thread-ul de download
 
 Cat timp nu am descarcat atatea fisiere cate si-a propus clientul,
 descarc segmentele aferente lipsa (metoda `manageRequestedFile()`).
@@ -171,7 +170,7 @@ ii semnalez tracker-ului acest lucru,
 trimitand mesajul **"CLIENT IS DONE"** in MPI.
 
 
-#### Thread-ul de upload
+### Thread-ul de upload
 
 Intr-o bucla care se opreste
 doar in momentul primirii mesajului **"COMPLETED"** de la tracker,
@@ -190,7 +189,7 @@ Peer-ul curent va putea astfel sti cu ce **hash** sa raspunda.
 Aceasta logica este implementata la nivel de cod in functia `requestFileSegment`.
 
 
-### Alte detalii strict de implementare
+## Alte detalii strict de implementare
 
 Pentru usurinta mea, am ales sa rezolv aceasta tema in C++,
 datorita claselor si unor structuri de date deja implementate in **std**,
